@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ticket-tag-doctor</title>
+<style>
+*{box-sizing:border-box} body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#f6f8fb;color:#17233b}
+header{background:#0b1f3a;color:#fff;padding:28px 20px;border-bottom:4px solid #d4a72c}
+header .wrap, main{max-width:900px;margin:0 auto}
+header h1{margin:0 0 6px;font-size:28px} header p{margin:0;color:#cfd9e8}
+main{padding:22px 16px 40px}
+.card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 2px 10px rgba(11,31,58,.08)}
+label{font-weight:600;display:block;margin:14px 0 6px}
+textarea{width:100%;min-height:170px;padding:10px;border:1px solid #c9d3e0;border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}
+textarea.small{min-height:90px}
+input[type=text],input[type=number],select{padding:8px 10px;border:1px solid #c9d3e0;border-radius:8px;max-width:100%}
+.row{display:flex;flex-wrap:wrap;gap:14px} .row>div{flex:1 1 180px}
+button{background:#0b1f3a;color:#fff;border:0;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:15px}
+button.accent{background:#d4a72c;color:#17233b;font-weight:700}
+button.secondary{background:#e7edf5;color:#0b1f3a}
+.btns{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+pre{background:#0b1f3a;color:#eef3fa;border-radius:10px;padding:16px;overflow:auto;white-space:pre-wrap;min-height:120px;font-size:13px}
+footer{max-width:900px;margin:0 auto;padding:0 16px 30px;color:#5a6a82;font-size:14px}
+a{color:#0b1f3a}
+.note{color:#5a6a82;font-size:13px}
+.checkline{font-weight:400;display:flex;gap:8px;align-items:center;margin-top:14px}
+</style>
+</head>
+<body>
+<header><div class="wrap"><h1>ticket-tag-doctor</h1><p>Audit a support ticket CSV export for tag hygiene: untagged tickets, near-duplicate tags, single-use tags, generic tags, and more.</p></div></header>
+<main>
+<div class="card">
+<label for="file">Choose a file</label>
+<input type="file" id="file">
+<label for="input">Ticket CSV input</label>
+<textarea id="input" placeholder="Paste the ticket CSV here, choose a file, or load a sample."></textarea>
+<div class="row"><div><label for="maxTags">Max tags per ticket (CLI --max-tags)</label><input type="number" id="maxTags" value="10" min="1"></div>
+<div><label for="minUses">Min uses per tag (CLI --min-uses)</label><input type="number" id="minUses" value="2" min="1"></div>
+<div><label for="tagsColumn">Tags column (CLI --tags-column)</label><input type="text" id="tagsColumn" value="tags"></div>
+<div><label for="idColumn">ID column (CLI --id-column, blank for auto)</label><input type="text" id="idColumn"></div></div>
+<label class="checkline"><input type="checkbox" id="useDict"> Check against the approved-tags dictionary (CLI --dictionary)</label>
+<label for="dictionary">Approved tags dictionary, one tag per line</label>
+<textarea class="small" id="dictionary"></textarea>
+<div class="btns">
+<button class="accent" id="run">Run</button>
+<button class="secondary" id="sample">Load sample</button>
+<button class="secondary" id="sample2">Load clean sample</button>
+<button class="secondary" id="download">Download report</button>
+</div>
+<label for="output">Report</label>
+<pre id="output">Press Run to see the report.</pre>
+</div>
+</main>
+<footer>
+<p>Built by AamirTechs. <a href="https://aamirtechs.github.io/">All tools</a> | <a href="https://github.com/aamirtechs/ticket-tag-doctor">Source</a></p>
+<p>Privacy: this tool runs 100% in your browser, nothing is uploaded.</p>
+</footer>
+<script id="core">
+
+var ALLOWED_PUNCT = "-_:/";
+var GENERIC_TAGS = {"question":1,"customer":1,"ticket":1,"support":1,"help":1,"issue":1,"problem":1,"general":1,"misc":1,"other":1,"enquiry":1,"inquiry":1,"request":1,"feedback":1,"info":1,"unknown":1,"todo":1,"test":1,"default":1,"new":1};
+function pyReprStr(s){
+  if(s.indexOf("'") >= 0 && s.indexOf('"') < 0) return '"' + s + '"';
+  return "'" + s.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'";
+}
+function pyReprChar(c){
+  if(c === "'") return '"\'"';
+  if(c === '"') return "'\"'";
+  if(c === "\\") return "'\\\\'";
+  return "'" + c + "'";
+}
+function parseCsvRows(text){
+  text = String(text == null ? "" : text);
+  if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  var rows = [], row = [], field = "", inQ = false, rowStarted = false, i = 0;
+  function endField(){ row.push(field); field = ""; }
+  function endRow(){ endField(); rows.push(row); row = []; rowStarted = false; }
+  while(i < text.length){
+    var c = text[i];
+    if(inQ){
+      if(c === '"'){ if(text[i + 1] === '"'){ field += '"'; i += 2; continue; } inQ = false; i++; continue; }
+      field += c; i++; continue;
+    }
+    if(c === '"' && field === ""){ inQ = true; rowStarted = true; i++; continue; }
+    if(c === ","){ endField(); rowStarted = true; i++; continue; }
+    if(c === "\r"){ if(text[i + 1] === "\n") i++; endRow(); i++; continue; }
+    if(c === "\n"){ endRow(); i++; continue; }
+    field += c; rowStarted = true; i++;
+  }
+  if(rowStarted || field !== "" || row.length > 0){ endField(); rows.push(row); }
+  return rows;
+}
+function splitTags(field){
+  if(field === null || field === undefined) return [];
+  var parts;
+  if(field.indexOf(",") >= 0 || field.indexOf(";") >= 0) parts = field.split(/[,;]/);
+  else parts = field.split(/\s+/);
+  return parts.map(function(p){ return p.trim(); }).filter(function(p){ return p !== ""; });
+}
+function invalidChars(tag){
+  var bad = [];
+  for(var ch of tag){
+    if(!(/[\p{L}\p{N}]/u.test(ch) || ALLOWED_PUNCT.indexOf(ch) >= 0)) bad.push(ch);
+  }
+  return bad;
+}
+function normalizeTag(tag){
+  var lowered = tag.toLowerCase();
+  var unified = lowered.replace(/[-_/]+/g, "_").replace(/^_+|_+$/g, "");
+  if(unified.length > 3 && unified.endsWith("s") && !unified.endsWith("ss")) unified = unified.slice(0, -1);
+  return unified;
+}
+function hasUpper(tag){
+  for(var ch of tag){
+    if(ch.toLowerCase() !== ch.toUpperCase() && ch === ch.toUpperCase()) return true;
+  }
+  return false;
+}
+function parseInput(inputText, idColumnOpt, tagsColumn){
+  var rows = parseCsvRows(inputText);
+  if(!rows.length) throw new Error("input is empty, no header row found");
+  var header = rows[0].map(function(n){ return n.trim(); });
+  if(header.indexOf(tagsColumn) < 0)
+    throw new Error("input has no " + pyReprStr(tagsColumn) + " column (header is: " + header.join(", ") + ")");
+  var idIndex = null;
+  if(idColumnOpt){
+    if(header.indexOf(idColumnOpt) < 0)
+      throw new Error("input has no " + pyReprStr(idColumnOpt) + " column (header is: " + header.join(", ") + ")");
+    idIndex = header.indexOf(idColumnOpt);
+  } else if(header.indexOf("id") >= 0) idIndex = header.indexOf("id");
+  else if(header.indexOf("ticket_id") >= 0) idIndex = header.indexOf("ticket_id");
+  var tagsIndex = header.indexOf(tagsColumn);
+  var tickets = [], findings = [];
+  for(var r = 1; r < rows.length; r++){
+    var row = rows[r];
+    var lineNumber = r + 1;
+    if(row.length === 0 || row.every(function(c){ return c.trim() === ""; })) continue;
+    if(row.length !== header.length){
+      findings.push({"ticket": "row " + lineNumber, "tag": null, "rule": "malformed-row", "severity": "error",
+        "message": "row has " + row.length + " fields but the header has " + header.length + ", so the row was skipped"});
+      continue;
+    }
+    var tid = idIndex === null ? "row " + lineNumber : (row[idIndex].trim() || "row " + lineNumber);
+    tickets.push({"id": tid, "tags": splitTags(row[tagsIndex])});
+  }
+  return {"tickets": tickets, "findings": findings};
+}
+function loadDictionary(text){
+  text = String(text);
+  if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  var approved = new Set();
+  text.split(/\r\n|[\n\r]/).forEach(function(line){
+    var s = line.trim();
+    if(!s || s.charAt(0) === "#") return;
+    approved.add(s.toLowerCase());
+  });
+  return approved;
+}
+function audit(tickets, maxTags, minUses, dictionary){
+  var findings = [];
+  function F(ticket, tag, rule, severity, message){ findings.push({"ticket": ticket, "tag": tag, "rule": rule, "severity": severity, "message": message}); }
+  var tagCount = new Map();
+  var tagVariants = new Map();
+  tickets.forEach(function(ticket){
+    var tags = ticket.tags;
+    if(!tags.length){
+      F(ticket.id, null, "untagged-ticket", "error", "ticket has no tags, so it cannot be routed, reported on, or found by tag");
+      return;
+    }
+    if(tags.length > maxTags)
+      F(ticket.id, null, "too-many-tags", "warning", "ticket carries " + tags.length + " tags, over the limit of " + maxTags + ", so the tag list is noise rather than signal");
+    var loweredCounts = new Map();
+    tags.forEach(function(tag){ var low = tag.toLowerCase(); loweredCounts.set(low, (loweredCounts.get(low) || 0) + 1); });
+    loweredCounts.forEach(function(count, lowered){
+      if(count > 1) F(ticket.id, lowered, "duplicate-tag-on-ticket", "warning", "tag appears " + count + " times on this ticket");
+    });
+    var seen = new Set();
+    tags.forEach(function(tag){
+      if(seen.has(tag)) return;
+      seen.add(tag);
+      var bad = invalidChars(tag);
+      if(bad.length){
+        F(ticket.id, tag, "invalid-characters", "error", "tag contains " + bad.map(pyReprChar).join(", ") + ", which Zendesk drops when the ticket is updated (allowed: letters, digits, -, _, :, /)");
+        return;
+      }
+      if(hasUpper(tag))
+        F(ticket.id, tag, "uppercase-tag", "warning", "tag has uppercase letters; Zendesk treats tags as lowercase, so this splits reporting from " + tag.toLowerCase());
+      if(GENERIC_TAGS[tag.toLowerCase()])
+        F(ticket.id, tag, "generic-tag", "warning", "tag says nothing about the ticket, so it adds noise to reports and views");
+      if(dictionary && !dictionary.has(tag.toLowerCase()))
+        F(ticket.id, tag, "unapproved-tag", "warning", "tag is not in the approved dictionary");
+      tagCount.set(tag, (tagCount.get(tag) || 0) + 1);
+      var canon = normalizeTag(tag);
+      if(!tagVariants.has(canon)) tagVariants.set(canon, new Set());
+      tagVariants.get(canon).add(tag);
+    });
+  });
+  Array.from(tagCount.keys()).sort().forEach(function(tag){
+    var count = tagCount.get(tag);
+    if(count < minUses)
+      F("(tag set)", tag, "single-use-tag", "warning", "tag is used on only " + count + " ticket" + (count === 1 ? "" : "s") + ", so it is a one-off rather than a category");
+  });
+  Array.from(tagVariants.keys()).sort().forEach(function(canon){
+    var variants = tagVariants.get(canon);
+    if(variants.size > 1){
+      var ordered = Array.from(variants).sort();
+      F("(tag set)", canon, "near-duplicate-tags", "warning", "tags " + ordered.map(pyReprStr).join(", ") + " all mean the same thing and should be merged into one tag");
+    }
+  });
+  return findings;
+}
+function formatFinding(f){
+  var target = f.tag !== null ? f.ticket + " [" + f.tag + "]" : f.ticket;
+  return f.severity.toUpperCase() + " [" + f.rule + "] " + target + ": " + f.message;
+}
+// runTool(inputText, options): options.dictionaryText, when a string, is the
+// approved-tags dictionary contents (the CLI --dictionary file). When it is
+// undefined, no dictionary check runs. options.maxTags and options.minUses
+// mirror --max-tags and --min-uses; options.tagsColumn and options.idColumn
+// mirror --tags-column and --id-column.
+window.runTool = function(inputText, options){
+  options = options || {};
+  var maxTags = options.maxTags === undefined || options.maxTags === null ? 10 : Number(options.maxTags);
+  var minUses = options.minUses === undefined || options.minUses === null ? 2 : Number(options.minUses);
+  if(maxTags < 1) return "error: --max-tags must be at least 1";
+  if(minUses < 1) return "error: --min-uses must be at least 1";
+  var dictionary = null;
+  if(typeof options.dictionaryText === "string") dictionary = loadDictionary(options.dictionaryText);
+  try {
+    var parsed = parseInput(String(inputText == null ? "" : inputText),
+      options.idColumn ? String(options.idColumn) : null,
+      options.tagsColumn ? String(options.tagsColumn) : "tags");
+    var findings = parsed.findings.concat(audit(parsed.tickets, Math.trunc(maxTags), Math.trunc(minUses), dictionary));
+    var totalTags = parsed.tickets.reduce(function(a, t){ return a + t.tags.length; }, 0);
+    var errors = findings.filter(function(f){ return f.severity === "error"; }).length;
+    var warnings = findings.length - errors;
+    var lines = findings.map(formatFinding);
+    lines.push("");
+    lines.push("Tickets: " + parsed.tickets.length + ", tags: " + totalTags + ", findings: " + findings.length + ", errors: " + errors + ", warnings: " + warnings);
+    if(findings.length === 0) lines.push("All tickets clean.");
+    return lines.join("\n");
+  } catch(e){ return "error: " + e.message; }
+};
+
+</script>
+<script>
+var SAMPLE = `id,subject,tags
+T-101,Refund not received,refund
+T-102,Refund status check,Refund
+T-103,Double charge on card,refunds;billing
+T-104,Where is my order?,question
+T-105,Login fails on mobile,"login, password_reset, mobile_app, urgent, vip, billing, account, security, 2fa, ios, android"
+T-106,Address change request,address_change
+T-107,Order arrived damaged,"damaged, RMA"
+T-108,Can I change delivery date?,"delivery, date_change, date-change"
+T-109,Subscription cancelled twice,cancel
+T-110,App crashes on checkout,crash!
+T-111,How do I reset my password?,password_reset
+T-112,Printer not connecting,
+T-113,Link is broken,website,extra-column
+`;
+var SAMPLE_CLEAN = `id,subject,tags
+T-201,Refund processed,refund; billing
+T-202,Delivery update,billing; delivery
+T-203,Refund confirmed,refund; delivery
+`;
+var SAMPLE_DICT = `# Approved tags for the support team, one per line.
+# Lines starting with # and blank lines are ignored.
+refund
+billing
+login
+password_reset
+delivery
+date_change
+cancel
+address_change
+damaged
+rma
+question
+`;
+var inputEl = document.getElementById("input");
+var outputEl = document.getElementById("output");
+document.getElementById("file").addEventListener("change", function(ev){
+  var f = ev.target.files[0]; if(!f) return;
+  var r = new FileReader(); r.onload = function(){ inputEl.value = r.result; }; r.readAsText(f);
+});
+function gatherOptions(){ function intVal(id, dflt){ var v = document.getElementById(id).value; var n = parseInt(v, 10); return isNaN(n) ? dflt : n; } var opts = { maxTags: intVal("maxTags", 10), minUses: intVal("minUses", 2), tagsColumn: document.getElementById("tagsColumn").value || "tags", idColumn: document.getElementById("idColumn").value }; if (document.getElementById("useDict").checked) opts.dictionaryText = document.getElementById("dictionary").value; return opts; }
+document.getElementById("run").addEventListener("click", function(){
+  try { outputEl.textContent = window.runTool(inputEl.value, gatherOptions()); }
+  catch(e){ outputEl.textContent = "Error: " + e.message; }
+});
+document.getElementById("sample").addEventListener("click", function(){
+  inputEl.value = SAMPLE;
+  if (window.onSample) window.onSample();
+});
+document.getElementById("download").addEventListener("click", function(){
+  var blob = new Blob([outputEl.textContent], {type:"text/plain"});
+  var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "report.txt"; a.click(); URL.revokeObjectURL(a.href);
+});
+document.getElementById("dictionary").value = SAMPLE_DICT;
+document.getElementById("sample2").addEventListener("click", function(){ inputEl.value = SAMPLE_CLEAN; });
+</script>
+</body>
+</html>

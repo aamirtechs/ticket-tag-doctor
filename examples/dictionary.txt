@@ -1,0 +1,13 @@
+# Approved tags for the support team, one per line.
+# Lines starting with # and blank lines are ignored.
+refund
+billing
+login
+password_reset
+delivery
+date_change
+cancel
+address_change
+damaged
+rma
+question

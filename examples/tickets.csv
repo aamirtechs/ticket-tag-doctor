@@ -1,0 +1,14 @@
+id,subject,tags
+T-101,Refund not received,refund
+T-102,Refund status check,Refund
+T-103,Double charge on card,refunds;billing
+T-104,Where is my order?,question
+T-105,Login fails on mobile,"login, password_reset, mobile_app, urgent, vip, billing, account, security, 2fa, ios, android"
+T-106,Address change request,address_change
+T-107,Order arrived damaged,"damaged, RMA"
+T-108,Can I change delivery date?,"delivery, date_change, date-change"
+T-109,Subscription cancelled twice,cancel
+T-110,App crashes on checkout,crash!
+T-111,How do I reset my password?,password_reset
+T-112,Printer not connecting,
+T-113,Link is broken,website,extra-column
